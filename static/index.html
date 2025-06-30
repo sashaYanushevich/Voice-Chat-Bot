@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Interview - Setup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #333;
+        }
+
+        .setup-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 3rem;
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .cv-upload-area {
+            border: 2px dashed #e1e5e9;
+            border-radius: 10px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+
+        .cv-upload-area:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .cv-upload-area.dragover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .cv-upload-area.uploaded {
+            border-color: #4CAF50;
+            background: rgba(76, 175, 80, 0.05);
+        }
+
+        .upload-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            color: #999;
+        }
+
+        .upload-text {
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-hint {
+            font-size: 0.875rem;
+            color: #999;
+        }
+
+        .cv-status {
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .cv-status.success {
+            color: #4CAF50;
+        }
+
+        .cv-status.error {
+            color: #f44336;
+        }
+
+        .start-btn {
+            width: 100%;
+            background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 1rem;
+        }
+
+        .start-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .start-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .required {
+            color: #f44336;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="logo">🎯</div>
+        <h1 class="title">Google Interview</h1>
+        <p class="subtitle">Frontend Developer Position - Warsaw</p>
+        
+        <form id="setupForm">
+            <div class="form-group">
+                <label for="firstName">First Name <span class="required">*</span></label>
+                <input type="text" id="firstName" name="firstName" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="lastName">Last Name <span class="required">*</span></label>
+                <input type="text" id="lastName" name="lastName" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="email">Email <span class="required">*</span></label>
+                <input type="email" id="email" name="email" required>
+            </div>
+            
+            <div class="form-group">
+                <label>CV Upload <span class="required">*</span></label>
+                <div id="cvUploadArea" class="cv-upload-area">
+                    <div class="upload-icon">📄</div>
+                    <div class="upload-text">Click to upload or drag & drop your CV</div>
+                    <div class="upload-hint">PDF files only, max 10MB</div>
+                    <input type="file" id="cvFile" accept=".pdf" class="hidden">
+                </div>
+                <div id="cvStatus" class="cv-status"></div>
+            </div>
+            
+            <button type="submit" id="startBtn" class="start-btn" disabled>
+                Start Interview
+            </button>
+        </form>
+    </div>
+
+    <script>
+        class InterviewSetup {
+            constructor() {
+                this.firstName = '';
+                this.lastName = '';
+                this.email = '';
+                this.cvFile = null;
+                this.cvText = '';
+                
+                this.initElements();
+                this.initEventListeners();
+            }
+            
+            initElements() {
+                this.formEl = document.getElementById('setupForm');
+                this.firstNameEl = document.getElementById('firstName');
+                this.lastNameEl = document.getElementById('lastName');
+                this.emailEl = document.getElementById('email');
+                this.cvUploadAreaEl = document.getElementById('cvUploadArea');
+                this.cvFileEl = document.getElementById('cvFile');
+                this.cvStatusEl = document.getElementById('cvStatus');
+                this.startBtnEl = document.getElementById('startBtn');
+            }
+            
+            initEventListeners() {
+                // Form inputs
+                this.firstNameEl.addEventListener('input', () => this.validateForm());
+                this.lastNameEl.addEventListener('input', () => this.validateForm());
+                this.emailEl.addEventListener('input', () => this.validateForm());
+                
+                // CV Upload
+                this.cvUploadAreaEl.addEventListener('click', () => this.cvFileEl.click());
+                this.cvFileEl.addEventListener('change', (e) => this.handleFileSelect(e));
+                
+                // Drag & Drop
+                this.cvUploadAreaEl.addEventListener('dragover', (e) => this.handleDragOver(e));
+                this.cvUploadAreaEl.addEventListener('dragleave', (e) => this.handleDragLeave(e));
+                this.cvUploadAreaEl.addEventListener('drop', (e) => this.handleDrop(e));
+                
+                // Form submit
+                this.formEl.addEventListener('submit', (e) => this.handleSubmit(e));
+            }
+            
+            handleDragOver(e) {
+                e.preventDefault();
+                this.cvUploadAreaEl.classList.add('dragover');
+            }
+            
+            handleDragLeave(e) {
+                e.preventDefault();
+                this.cvUploadAreaEl.classList.remove('dragover');
+            }
+            
+            handleDrop(e) {
+                e.preventDefault();
+                this.cvUploadAreaEl.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    this.processFile(files[0]);
+                }
+            }
+            
+            handleFileSelect(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    this.processFile(file);
+                }
+            }
+            
+            async processFile(file) {
+                if (file.type !== 'application/pdf') {
+                    this.showError('Please upload a PDF file only');
+                    return;
+                }
+                
+                if (file.size > 10 * 1024 * 1024) {
+                    this.showError('File size must be less than 10MB');
+                    return;
+                }
+                
+                try {
+                    this.cvStatusEl.textContent = '⏳ Processing CV...';
+                    this.cvStatusEl.className = 'cv-status';
+                    
+                    // Extract text from PDF (simplified - in real app would use PDF.js)
+                    this.cvFile = file;
+                    
+                    // Update UI
+                    this.cvUploadAreaEl.classList.add('uploaded');
+                    this.cvUploadAreaEl.innerHTML = `
+                        <div class="upload-icon">✅</div>
+                        <div class="upload-text">${file.name}</div>
+                        <div class="upload-hint">${(file.size / 1024 / 1024).toFixed(1)} MB</div>
+                    `;
+                    
+                    this.cvStatusEl.textContent = '✅ CV uploaded successfully';
+                    this.cvStatusEl.className = 'cv-status success';
+                    
+                    this.validateForm();
+                    
+                } catch (error) {
+                    this.showError('Error processing CV file');
+                }
+            }
+            
+            showError(message) {
+                this.cvStatusEl.textContent = '❌ ' + message;
+                this.cvStatusEl.className = 'cv-status error';
+                this.cvFile = null;
+                this.validateForm();
+            }
+            
+            validateForm() {
+                const firstName = this.firstNameEl.value.trim();
+                const lastName = this.lastNameEl.value.trim();
+                const email = this.emailEl.value.trim();
+                const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+                
+                const isValid = firstName && lastName && emailValid && this.cvFile;
+                
+                this.startBtnEl.disabled = !isValid;
+                
+                return isValid;
+            }
+            
+            async handleSubmit(e) {
+                e.preventDefault();
+                
+                if (!this.validateForm()) {
+                    return;
+                }
+                
+                // Show loading state
+                this.startBtnEl.disabled = true;
+                this.startBtnEl.textContent = '⏳ Uploading CV...';
+                
+                try {
+                    // Create FormData for POST request
+                    const formData = new FormData();
+                    formData.append('cv_file', this.cvFile);
+                    formData.append('first_name', this.firstNameEl.value.trim());
+                    formData.append('last_name', this.lastNameEl.value.trim());
+                    formData.append('email', this.emailEl.value.trim());
+                    
+                    // Upload CV via POST request
+                    const response = await fetch('/upload-cv', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(result.error || 'Upload failed');
+                    }
+                    
+                    // Store session data for interview page
+                    localStorage.setItem('sessionId', result.session_id);
+                    localStorage.setItem('candidateData', JSON.stringify(result.candidate));
+                    
+                    // Success - redirect to interview
+                    this.startBtnEl.textContent = '✅ Success! Starting interview...';
+                    
+                    setTimeout(() => {
+                        window.location.href = '/static/interview.html';
+                    }, 1000);
+                    
+                } catch (error) {
+                    this.showError('Upload failed: ' + error.message);
+                    this.startBtnEl.disabled = false;
+                    this.startBtnEl.textContent = 'Start Interview';
+                }
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new InterviewSetup();
+        });
+    </script>
+</body>
+</html> 
