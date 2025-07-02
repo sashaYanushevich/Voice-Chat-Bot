@@ -38,7 +38,7 @@ class OpenRouterClient:
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=1000
+                max_tokens=500
             )
             
             assistant_message = response.choices[0].message.content
@@ -73,7 +73,7 @@ class OpenRouterClient:
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=1000,
+                max_tokens=500,
                 stream=True
             )
             

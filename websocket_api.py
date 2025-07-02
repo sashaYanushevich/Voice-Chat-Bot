@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import uvicorn
 from dotenv import load_dotenv
 import PyPDF2
+from fastapi.middleware.cors import CORSMiddleware
 
 # Импорты наших компонентов
 from speech_to_text import DeepgramSTT
@@ -21,6 +22,13 @@ load_dotenv()
 
 app = FastAPI(title="Voice Bot API", description="Real-time voice chat bot")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Статические файлы
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -31,16 +39,13 @@ class VoiceBotWebSocket:
         self.active_connections: Dict[str, WebSocket] = {}
         self.user_sessions: Dict[str, dict] = {}
         self.cv_sessions: Dict[str, dict] = {}  # Хранилище для CV сессий
+        self.user_llm_clients: Dict[str, OpenRouterClient] = {}  # Отдельный LLM клиент для каждого пользователя
         
         # Инициализируем компоненты
         try:
             print("🔧 Initializing STT...")
             self.stt = DeepgramSTT()
             print("✅ STT initialized")
-            
-            print("🔧 Initializing LLM...")
-            self.llm = OpenRouterClient()
-            print("✅ LLM initialized")
             
             print("🔧 Initializing TTS...")
             self.tts = AWSPollyTTS(voice_id="Salli", chunk_size=200)
@@ -99,7 +104,25 @@ class VoiceBotWebSocket:
             del self.cv_sessions[session_id]
             print(f"🧹 Cleaned up old CV session: {session_id}")
         
+        # Также очищаем неактивные LLM клиенты
+        inactive_users = []
+        for user_id in self.user_llm_clients.keys():
+            if user_id not in self.active_connections:
+                inactive_users.append(user_id)
+        
+        for user_id in inactive_users:
+            self.user_llm_clients[user_id].clear_history()
+            del self.user_llm_clients[user_id]
+            print(f"🧹 Cleaned up inactive LLM client for user: {user_id}")
+        
         return len(old_sessions)
+    
+    def get_user_llm_client(self, user_id: str) -> OpenRouterClient:
+        """Получает или создает LLM клиент для конкретного пользователя"""
+        if user_id not in self.user_llm_clients:
+            print(f"🔧 Creating new LLM client for user {user_id}")
+            self.user_llm_clients[user_id] = OpenRouterClient()
+        return self.user_llm_clients[user_id]
     
     async def connect(self, websocket: WebSocket, user_id: str, session_id: str = None):
         """Подключение нового пользователя"""
@@ -165,9 +188,13 @@ CV CONTENT:
                     
                     enhanced_prompt += """
 
-Use this information to conduct a personalized interview, asking relevant questions based on their CV and experience."""
+Use this information to conduct a personalized interview, asking relevant questions based on their CV and experience.
+
+CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             
-            bot_response = await self.llm.chat_completion(greeting_prompt, enhanced_prompt)
+            # Получаем персональный LLM клиент для пользователя
+            user_llm = self.get_user_llm_client(user_id)
+            bot_response = await user_llm.chat_completion(greeting_prompt, enhanced_prompt)
             print(f"🤖 HR greeting to {user_id}: {bot_response}")
             
             await self.send_message(user_id, {
@@ -201,6 +228,11 @@ Use this information to conduct a personalized interview, asking relevant questi
             del self.active_connections[user_id]
         if user_id in self.user_sessions:
             del self.user_sessions[user_id]
+        if user_id in self.user_llm_clients:
+            # Очищаем историю разговора перед удалением
+            self.user_llm_clients[user_id].clear_history()
+            del self.user_llm_clients[user_id]
+            print(f"🧹 Cleared LLM client for user {user_id}")
         print(f"❌ User {user_id} disconnected")
     
     async def send_message(self, user_id: str, message: dict):
@@ -271,9 +303,14 @@ CV CONTENT:
                     
                     enhanced_prompt += """
 
-Use this information to conduct a personalized interview, asking relevant questions based on their CV and experience."""
+Use this information to conduct a personalized interview, asking relevant questions based on their CV and experience.
+
+CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
+                
+                # Получаем персональный LLM клиент для пользователя
+                user_llm = self.get_user_llm_client(user_id)
+                bot_response = await user_llm.chat_completion(user_text, enhanced_prompt)
             
-            bot_response = await self.llm.chat_completion(user_text, enhanced_prompt)
             print(f"🧠 LLM result for {user_id}: '{bot_response}'")
             
             print(f"🤖 Bot to {user_id}: {bot_response}")
@@ -517,7 +554,8 @@ async def test_components():
         results["stt"] = "✅ STT component initialized"
         
         # Тест LLM
-        test_response = await voice_bot.llm.chat_completion("Say hello", voice_bot.system_prompt)
+        test_llm = OpenRouterClient()
+        test_response = await test_llm.chat_completion("Say hello", voice_bot.system_prompt)
         results["llm"] = f"✅ LLM response: {test_response[:50]}..."
         
         # Тест TTS
@@ -533,16 +571,10 @@ if __name__ == "__main__":
     # Создаем папку static если её нет
     os.makedirs("static", exist_ok=True)
     
-    print("🚀 Starting Voice Bot WebSocket API...")
-    print("🔍 HTTPS server at: https://localhost:8800")
-    print("🔍 Test components at: https://localhost:8800/test-components")
-    print("⚠️  Accept the self-signed certificate warning in your browser")
     
     uvicorn.run(
         "websocket_api:app",
         host="0.0.0.0",
         port=8800,
         reload=True,
-        ssl_keyfile="key.pem",
-        ssl_certfile="cert.pem"
     ) 
