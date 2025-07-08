@@ -191,8 +191,8 @@
                 <div id="cvUploadArea" class="cv-upload-area">
                     <div class="upload-icon">📄</div>
                     <div class="upload-text">Click to upload or drag & drop your CV</div>
-                    <div class="upload-hint">PDF files only, max 10MB</div>
-                    <input type="file" id="cvFile" accept=".pdf" class="hidden">
+                    <div class="upload-hint">PDF or DOCX files only, max 10MB</div>
+                    <input type="file" id="cvFile" accept=".pdf,.docx" class="hidden">
                 </div>
                 <div id="cvStatus" class="cv-status"></div>
             </div>
@@ -274,8 +274,13 @@
             }
             
             async processFile(file) {
-                if (file.type !== 'application/pdf') {
-                    this.showError('Please upload a PDF file only');
+                const allowedTypes = [
+                    'application/pdf',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                ];
+                
+                if (!allowedTypes.includes(file.type)) {
+                    this.showError('Please upload a PDF or DOCX file only');
                     return;
                 }
                 
@@ -288,7 +293,7 @@
                     this.cvStatusEl.textContent = '⏳ Processing CV...';
                     this.cvStatusEl.className = 'cv-status';
                     
-                    // Extract text from PDF (simplified - in real app would use PDF.js)
+                    // File will be processed on server (PDF.js for PDF, python-docx for DOCX)
                     this.cvFile = file;
                     
                     // Update UI

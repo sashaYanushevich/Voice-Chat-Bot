@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import uvicorn
 from dotenv import load_dotenv
 import PyPDF2
+from docx import Document
 from fastapi.middleware.cors import CORSMiddleware
 
 # Импорты наших компонентов
@@ -91,6 +92,35 @@ class VoiceBotWebSocket:
             print(f"❌ PDF extraction error: {e}")
             return None
     
+    def _extract_docx_text(self, docx_data: bytes) -> str:
+        """Извлекает текст из DOCX файла"""
+        try:
+            # Создаем объект BytesIO для работы с DOCX
+            docx_stream = io.BytesIO(docx_data)
+            
+            # Читаем DOCX
+            doc = Document(docx_stream)
+            
+            # Извлекаем текст из всех параграфов
+            text_content = ""
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_content += paragraph.text + "\n"
+            
+            # Также извлекаем текст из таблиц
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            text_content += cell.text + " "
+                    text_content += "\n"
+            
+            return text_content.strip()
+            
+        except Exception as e:
+            print(f"❌ DOCX extraction error: {e}")
+            return None
+    
     def cleanup_old_cv_sessions(self):
         """Очищает старые CV сессии (старше 1 часа)"""
         current_time = time.time()
@@ -163,7 +193,7 @@ class VoiceBotWebSocket:
             print(f"🎬 Starting automatic interview for {user_id}")
             
             # Генерируем приветственное сообщение от HR
-            greeting_prompt = "Start the interview. Introduce yourself as HR specialist from Google and begin with a warm greeting and brief introduction of the position."
+            greeting_prompt = "Start the interview exactly as instructed in the prompt. Follow the 'Begin with:' instruction precisely."
             
             # Создаем расширенный системный промпт с CV и данными кандидата если есть
             enhanced_prompt = self.system_prompt
@@ -474,10 +504,14 @@ async def upload_cv(
     """Загрузка CV и данных кандидата"""
     try:
         # Проверяем тип файла
-        if cv_file.content_type != "application/pdf":
+        allowed_types = [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ]
+        if cv_file.content_type not in allowed_types:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Only PDF files are allowed"}
+                content={"error": "Only PDF and DOCX files are allowed"}
             )
         
         # Проверяем размер файла (10MB)
@@ -488,12 +522,23 @@ async def upload_cv(
                 content={"error": "File size must be less than 10MB"}
             )
         
-        # Извлекаем текст из PDF
-        cv_text = voice_bot._extract_pdf_text(contents)
+        # Извлекаем текст в зависимости от типа файла
+        if cv_file.content_type == "application/pdf":
+            cv_text = voice_bot._extract_pdf_text(contents)
+            file_type = "PDF"
+        elif cv_file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            cv_text = voice_bot._extract_docx_text(contents)
+            file_type = "DOCX"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Unsupported file type"}
+            )
+        
         if not cv_text:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Could not extract text from PDF"}
+                content={"error": f"Could not extract text from {file_type} file"}
             )
         
         # Генерируем уникальный ID для сессии
