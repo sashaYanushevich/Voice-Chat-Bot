@@ -41,6 +41,26 @@ class VoiceBotWebSocket:
         self.user_sessions: Dict[str, dict] = {}
         self.cv_sessions: Dict[str, dict] = {}  # Хранилище для CV сессий
         self.user_llm_clients: Dict[str, OpenRouterClient] = {}  # Отдельный LLM клиент для каждого пользователя
+        self.user_timeout_tasks: Dict[str, asyncio.Task] = {}  # Задачи таймаута для каждого пользователя
+        self.user_timeout_active: Dict[str, bool] = {}  # Флаг активного таймаута для каждого пользователя
+        self.user_timeout_stage: Dict[str, int] = {}  # Стадия таймаута (0, 1, 2)
+        self.timeout_responses = {
+            1: [  # Первая напоминалка (5 сек)
+                "I didn't catch your response — would you like me to repeat the question?",
+                "Are you still there?",
+                "I'm waiting for your response. Are you ready to continue?"
+            ],
+            2: [  # Вторая напоминалка (10 сек)
+                "Should I continue with the next question?",
+                "Let me know when you're ready to proceed.",
+                "Are you having any technical difficulties?"
+            ],
+            3: [  # Завершение звонка (10 сек)
+                "I think we're having connection issues. Thank you for your time, and we'll be in touch soon.",
+                "It seems we've lost connection. We'll contact you to reschedule the interview.",
+                "Thank you for your interest. We'll reach out to you regarding next steps."
+            ]
+        }
         
         # Инициализируем компоненты
         try:
@@ -49,7 +69,7 @@ class VoiceBotWebSocket:
             print("✅ STT initialized")
             
             print("🔧 Initializing TTS...")
-            self.tts = AWSPollyTTS(voice_id="Salli", chunk_size=200)
+            self.tts = AWSPollyTTS(voice_id="Ruth", engine="generative", chunk_size=200)
             print("✅ TTS initialized")
             
             # Системный промпт
@@ -154,6 +174,113 @@ class VoiceBotWebSocket:
             self.user_llm_clients[user_id] = OpenRouterClient()
         return self.user_llm_clients[user_id]
     
+    async def start_response_timeout(self, user_id: str):
+        """Запускает таймер ожидания ответа пользователя"""
+        # Проверяем, не активен ли уже таймер
+        if self.user_timeout_active.get(user_id, False):
+            print(f"⏰ Timeout already active for {user_id}, skipping")
+            return
+            
+        # Отменяем предыдущий таймер если есть
+        if user_id in self.user_timeout_tasks:
+            self.user_timeout_tasks[user_id].cancel()
+        
+        # Устанавливаем флаг активного таймера и начальную стадию
+        self.user_timeout_active[user_id] = True
+        self.user_timeout_stage[user_id] = 1  # Начинаем с первой стадии
+        
+        # Создаем новый таймер (первая стадия - 5 секунд)
+        self.user_timeout_tasks[user_id] = asyncio.create_task(
+            self._timeout_handler(user_id)
+        )
+    
+    async def cancel_response_timeout(self, user_id: str):
+        """Отменяет таймер ожидания ответа"""
+        # Сбрасываем флаг активного таймера и стадию
+        self.user_timeout_active[user_id] = False
+        self.user_timeout_stage[user_id] = 0
+        
+        if user_id in self.user_timeout_tasks:
+            self.user_timeout_tasks[user_id].cancel()
+            del self.user_timeout_tasks[user_id]
+    
+    async def _timeout_handler(self, user_id: str):
+        """Обработчик таймаута с тремя стадиями"""
+        try:
+            stage = self.user_timeout_stage.get(user_id, 1)
+            
+            # Определяем время ожидания в зависимости от стадии
+            if stage == 1:
+                wait_time = 5.0  # Первая напоминалка через 5 сек
+            elif stage == 2:
+                wait_time = 10.0  # Вторая напоминалка через 10 сек
+            else:  # stage == 3
+                wait_time = 10.0  # Завершение через 10 сек
+            
+            print(f"⏰ Starting timeout stage {stage} for {user_id} (waiting {wait_time}s)")
+            await asyncio.sleep(wait_time)
+            
+            # Проверяем, что таймер все еще активен
+            if not self.user_timeout_active.get(user_id, False):
+                return
+            
+            # Если дошли сюда, значит пользователь не ответил
+            import random
+            timeout_message = random.choice(self.timeout_responses[stage])
+            
+            print(f"⏰ Timeout stage {stage} for user {user_id}: {timeout_message}")
+            
+            await self.send_message(user_id, {
+                "type": "bot_text",
+                "text": timeout_message
+            })
+            
+            # Озвучиваем сообщение о таймауте
+            if stage == 3:
+                await self.send_message(user_id, {
+                    "type": "status",
+                    "message": "🔊 HR is ending the interview..."
+                })
+            else:
+                await self.send_message(user_id, {
+                    "type": "status",
+                    "message": "🔊 HR is prompting you..."
+                })
+            
+            await self._synthesize_and_send_audio(user_id, timeout_message)
+            
+            if stage == 3:
+                # Завершаем интервью
+                await self.send_message(user_id, {
+                    "type": "interview_ended",
+                    "message": "🔚 Interview ended due to no response"
+                })
+                
+                # Отключаем пользователя
+                print(f"🔚 Ending interview for {user_id} due to no response")
+                self.disconnect(user_id)
+                return
+            else:
+                await self.send_message(user_id, {
+                    "type": "completed",
+                    "message": "✅ Ready for your response"
+                })
+            
+            # Переходим к следующей стадии
+            self.user_timeout_stage[user_id] = stage + 1
+            
+            # ВАЖНО: НЕ сбрасываем флаг здесь - оставляем активным до audio_playback_complete
+            # Это предотвратит запуск новых таймеров пока играет timeout сообщение
+            
+        except asyncio.CancelledError:
+            # Таймер был отменен (пользователь ответил вовремя)
+            self.user_timeout_active[user_id] = False
+            self.user_timeout_stage[user_id] = 0
+        except Exception as e:
+            print(f"❌ Timeout handler error for {user_id}: {e}")
+            self.user_timeout_active[user_id] = False
+            self.user_timeout_stage[user_id] = 0
+    
     async def connect(self, websocket: WebSocket, user_id: str, session_id: str = None):
         """Подключение нового пользователя"""
         await websocket.accept()
@@ -245,6 +372,9 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                 "message": "✅ Ready to hear your response"
             })
             
+            # НЕ запускаем таймер здесь - ждем уведомления о завершении воспроизведения
+            # await self.start_response_timeout(user_id)
+            
         except Exception as e:
             print(f"❌ Error starting interview for {user_id}: {e}")
             await self.send_message(user_id, {
@@ -263,6 +393,16 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             self.user_llm_clients[user_id].clear_history()
             del self.user_llm_clients[user_id]
             print(f"🧹 Cleared LLM client for user {user_id}")
+        # Отменяем таймер ожидания если есть
+        if user_id in self.user_timeout_tasks:
+            self.user_timeout_tasks[user_id].cancel()
+            del self.user_timeout_tasks[user_id]
+            print(f"🧹 Cancelled timeout task for user {user_id}")
+        # Очищаем флаги таймаута
+        if user_id in self.user_timeout_active:
+            del self.user_timeout_active[user_id]
+        if user_id in self.user_timeout_stage:
+            del self.user_timeout_stage[user_id]
         print(f"❌ User {user_id} disconnected")
     
     async def send_message(self, user_id: str, message: dict):
@@ -281,7 +421,7 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             # 1. STT - распознаем речь
             print(f"🎧 Starting STT for {user_id}")
             await self.send_message(user_id, {
-                "type": "status", 
+                "type": "status",
                 "message": "🎧 Recognizing speech..."
             })
             
@@ -289,12 +429,16 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             print(f"🎧 STT result for {user_id}: '{user_text}'")
             
             if not user_text.strip():
-                print(f"⚠️ Empty STT result for {user_id}")
+                print(f"⚠️ Empty STT result for {user_id} - ignoring, keeping timeout active")
                 await self.send_message(user_id, {
-                    "type": "error",
-                    "message": "❌ Could not recognize speech"
+                    "type": "status",
+                    "message": "🎧 Could not recognize speech, please try again"
                 })
+                # НЕ отменяем таймер для пустых результатов - продолжаем ждать
                 return
+            
+            # Отменяем таймер ожидания только если получили реальный текст
+            await self.cancel_response_timeout(user_id)
             
             print(f"👤 User {user_id}: {user_text}")
             
@@ -364,6 +508,9 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                 "type": "completed",
                 "message": "✅ Ready for next question"
             })
+            
+            # НЕ запускаем таймер здесь - ждем уведомления о завершении воспроизведения
+            # await self.start_response_timeout(user_id)
             
             print(f"✅ Audio processing completed for {user_id}")
             
@@ -467,6 +614,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
             message = await websocket.receive_text()
             data = json.loads(message)
             
+            # Проверяем, что пользователь все еще подключен
+            if user_id not in voice_bot.active_connections:
+                print(f"⚠️ Ignoring message from disconnected user {user_id}")
+                break
+            
             print(f"📨 Received message from {user_id}: type={data.get('type')}")
             
             if data["type"] == "audio":
@@ -487,6 +639,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 
             elif data["type"] == "ping":
                 await voice_bot.send_message(user_id, {"type": "pong"})
+                
+            elif data["type"] == "audio_playback_complete":
+                print(f"🔊 Audio playback completed for {user_id}")
+                
+                # Если таймер был активен (timeout сообщение закончилось)
+                if voice_bot.user_timeout_active.get(user_id, False):
+                    current_stage = voice_bot.user_timeout_stage.get(user_id, 1)
+                    print(f"🔊 Timeout message playback completed for {user_id}, stage {current_stage-1}")
+                    
+                    # Если это была третья стадия (завершение интервью), не запускаем новый таймер
+                    if current_stage > 3:
+                        print(f"🔚 Interview ended for {user_id}, not starting new timeout")
+                        return
+                    
+                    # Сбрасываем флаг активного таймера
+                    voice_bot.user_timeout_active[user_id] = False
+                    
+                    # Запускаем следующую стадию таймера
+                    print(f"🔊 Starting timeout stage {current_stage} for {user_id}")
+                    voice_bot.user_timeout_tasks[user_id] = asyncio.create_task(
+                        voice_bot._timeout_handler(user_id)
+                    )
+                    voice_bot.user_timeout_active[user_id] = True
+                else:
+                    # Обычное завершение воспроизведения (не timeout сообщение)
+                    print(f"🔊 Starting new timeout for {user_id}")
+                    await voice_bot.start_response_timeout(user_id)
                 
     except WebSocketDisconnect:
         voice_bot.disconnect(user_id)

@@ -163,17 +163,20 @@ class SpeechSynthesizer:
         # Импортируем AWS TTS
         from aws_tts import AWSPollyTTS
         
-        # Настройки для AWS Polly
-        voice_id = getattr(config, 'aws_voice_id', 'Salli')  # или 'Matthew', 'Salli'
-        region = getattr(config, 'aws_region', 'us-east-1')
-        chunk_size = getattr(config, 'tts_chunk_size', 30)
+        # Настройки для AWS Polly (используем переменные окружения или значения по умолчанию)
+        voice_id = getattr(config, 'aws_voice_id', os.getenv('AWS_POLLY_VOICE_ID', 'Ruth'))
+        engine = getattr(config, 'aws_engine', os.getenv('AWS_POLLY_ENGINE', 'generative'))
+        region = getattr(config, 'aws_region', os.getenv('AWS_DEFAULT_REGION', 'us-east-1'))
+        chunk_size = getattr(config, 'tts_chunk_size', 300)
         
         try:
             self.tts = AWSPollyTTS(
                 voice_id=voice_id,
                 region_name=region,
-                chunk_size=chunk_size
+                chunk_size=chunk_size,
+                engine=engine
             )
+            print(f"✅ AWS Polly initialized with voice '{voice_id}' using '{engine}' engine")
         except Exception as e:
             print(f"❌ AWS Polly initialization error: {e}")
             print("💡 Fallback to Deepgram TTS...")
@@ -236,21 +239,84 @@ class SpeechSynthesizer:
 class VoiceAssistant:
     """Главный класс приложения, который управляет потоком разговора."""
     TERMINATION_PHRASES = ["goodbye", "exit", "quit", "stop", "bye"]
+    TIMEOUT_RESPONSES = [
+        "I didn't catch your response — would you like me to repeat the question?",
+        "Are you still there?",
+        "Should I continue with the next question?",
+        "I'm waiting for your response. Are you ready to continue?",
+        "Let me know when you're ready to proceed."
+    ]
 
     def __init__(self, config: Config):
         self.transcriber = LiveTranscriber(config)
         self.llm_processor = LLMProcessor(config)
         self.synthesizer = SpeechSynthesizer(config)
+        self.timeout_task = None
+
+    async def start_timeout(self):
+        """Запускает таймер ожидания ответа пользователя (5 секунд)"""
+        if self.timeout_task:
+            self.timeout_task.cancel()
+        
+        self.timeout_task = asyncio.create_task(self._timeout_handler())
+    
+    async def cancel_timeout(self):
+        """Отменяет таймер ожидания ответа"""
+        if self.timeout_task:
+            self.timeout_task.cancel()
+            self.timeout_task = None
+    
+    async def _timeout_handler(self):
+        """Обработчик таймаута - вызывается через 5 секунд"""
+        try:
+            await asyncio.sleep(5.0)  # Ждем 5 секунд
+            
+            # Если дошли сюда, значит пользователь не ответил
+            import random
+            timeout_message = random.choice(self.TIMEOUT_RESPONSES)
+            
+            print(f"⏰ Timeout: {timeout_message}")
+            print(f"🤖 AI: {timeout_message}")
+            await self.synthesizer.speak(timeout_message)
+            
+            # Запускаем новый таймер
+            await self.start_timeout()
+            
+        except asyncio.CancelledError:
+            # Таймер был отменен (пользователь ответил вовремя)
+            pass
+
+    async def listen_with_timeout(self):
+        """Слушает с таймаутом - возвращает текст или None если таймаут"""
+        # Запускаем таймер
+        await self.start_timeout()
+        
+        try:
+            # Слушаем пользователя
+            user_text = await self.transcriber.listen()
+            
+            # Отменяем таймер если получили ответ
+            await self.cancel_timeout()
+            
+            return user_text
+        except Exception as e:
+            await self.cancel_timeout()
+            raise e
 
     async def run(self):
         """Главный цикл голосового ассистента."""
         print("--- 🎤 Voice Assistant Activated ---")
         print(f"Say any of these phrases to exit: {', '.join(self.TERMINATION_PHRASES)}")
         
+        # Начальное приветствие
+        greeting = "Hello! I'm Sarah Mitchell from Google HR. Let's discuss the Frontend Developer position in Warsaw. Which JavaScript framework do you use most often?"
+        print(f"🤖 AI: {greeting}")
+        await self.synthesizer.speak(greeting)
+        
         while True:
             try:
                 print("\n🎧 Listening...")
-                user_text = await self.transcriber.listen()
+                user_text = await self.listen_with_timeout()
                 
                 if not user_text:
                     continue
@@ -259,6 +325,7 @@ class VoiceAssistant:
 
                 # Check for termination phrases
                 if any(phrase in user_text.lower().strip() for phrase in self.TERMINATION_PHRASES):
+                    await self.cancel_timeout()
                     print("Termination phrase detected. Shutting down.")
                     goodbye_message = "Goodbye! Have a great day!"
                     print(f"🤖 AI: {goodbye_message}")
@@ -269,6 +336,7 @@ class VoiceAssistant:
                 await self.synthesizer.speak(ai_response)
                 
             except Exception as e:
+                await self.cancel_timeout()
                 print(f"Error in main loop: {e}")
                 print("Restarting listening loop...")
                 await asyncio.sleep(1)

@@ -611,6 +611,13 @@
                     audio.addEventListener('ended', () => {
                         URL.revokeObjectURL(audioUrl);
                         this.currentAudio = null;
+                        
+                        // Check if this was the last chunk
+                        if (chunk.index === chunk.total - 1) {
+                            // All audio chunks have finished playing
+                            this.onAudioPlaybackComplete();
+                        }
+                        
                         this.playNextChunk();
                     });
 
@@ -643,6 +650,17 @@
                         reject(error);
                     }
                 });
+            }
+
+            onAudioPlaybackComplete() {
+                // Notify server that audio playback is complete
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'audio_playback_complete'
+                    }));
+                }
+                
+                console.log('🔊 Audio playback completed, notifying server');
             }
 
             endCall() {

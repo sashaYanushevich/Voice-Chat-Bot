@@ -8,23 +8,32 @@ import os
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class AWSPollyTTS:
     """AWS Polly TTS с chunking и асинхронной обработкой."""
     
-    def __init__(self, 
-                 voice_id: str = "Joanna",
-                 region_name: str = "us-east-1",
-                 chunk_size: int = 300):
+    def __init__(self,
+                 voice_id: str = None,
+                 region_name: str = None,
+                 chunk_size: int = 300,
+                 engine: str = None):
         """
         Args:
-            voice_id: Голос AWS Polly (Joanna, Matthew, Salli и т.д.)
+            voice_id: Голос AWS Polly (Ruth, Joanna, Matthew, Salli и т.д.)
             region_name: AWS регион
             chunk_size: Максимальный размер чанка в символах
+            engine: Движок синтеза (generative, neural, standard)
         """
-        self.voice_id = voice_id
+        # Используем переменные окружения или значения по умолчанию
+        self.voice_id = voice_id or os.getenv("AWS_POLLY_VOICE_ID", "Ruth")
+        self.engine = engine or os.getenv("AWS_POLLY_ENGINE", "generative")
         self.chunk_size = chunk_size
+        region_name = region_name or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
         
         try:
             self.polly_client = boto3.client('polly', region_name=region_name)
@@ -88,15 +97,32 @@ class AWSPollyTTS:
         try:
             # Выполняем синтез в отдельном потоке чтобы не блокировать event loop
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None, 
-                lambda: self.polly_client.synthesize_speech(
-                    Text=text,
-                    OutputFormat='mp3',
-                    VoiceId=self.voice_id,
-                    Engine='neural'  # Используем neural engine для лучшего качества
+            
+            # Пробуем с выбранным движком
+            try:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.polly_client.synthesize_speech(
+                        Text=text,
+                        OutputFormat='mp3',
+                        VoiceId=self.voice_id,
+                        Engine=self.engine
+                    )
                 )
-            )
+            except Exception as engine_error:
+                print(f"⚠️  Engine '{self.engine}' failed for voice '{self.voice_id}': {engine_error}")
+                print(f"🔄 Falling back to neural engine...")
+                
+                # Fallback к neural engine
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.polly_client.synthesize_speech(
+                        Text=text,
+                        OutputFormat='mp3',
+                        VoiceId=self.voice_id,
+                        Engine='neural'
+                    )
+                )
             
             # Читаем аудио данные
             audio_data = response['AudioStream'].read()
@@ -201,21 +227,21 @@ class AWSPollyTTS:
 async def test_polly():
     """Тестирование AWS Polly TTS."""
     try:
-        tts = AWSPollyTTS(voice_id="Joanna")
+        tts = AWSPollyTTS()  # Используем настройки по умолчанию (Ruth + generative)
         
         test_text = """
-        Привет! Это тестирование AWS Polly с chunking технологией. 
-        Каждое предложение обрабатывается отдельно. 
-        Пока одно воспроизводится, другие уже синтезируются в фоне.
-        Это даёт намного лучшую производительность и меньшую задержку!
+        Hello! This is a test of AWS Polly with the new Generative AI voice Ruth.
+        Each sentence is processed separately using chunking technology.
+        While one chunk is playing, others are being synthesized in the background.
+        This provides much better performance and lower latency!
         """
         
-        print("🎤 Начинаем тест AWS Polly...")
+        print(f"🎤 Starting AWS Polly test with voice '{tts.voice_id}' using '{tts.engine}' engine...")
         await tts.speak(test_text)
-        print("🎉 Тест завершён!")
+        print("🎉 Test completed!")
         
     except Exception as e:
-        print(f"❌ Ошибка теста: {e}")
+        print(f"❌ Test error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(test_polly()) 
