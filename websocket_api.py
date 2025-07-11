@@ -231,7 +231,7 @@ class VoiceBotWebSocket:
             print(f"⏰ Timeout stage {stage} for user {user_id}: {timeout_message}")
             
             await self.send_message(user_id, {
-                "type": "bot_text",
+                "type": "bot_waiting",
                 "text": timeout_message
             })
             
