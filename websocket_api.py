@@ -211,11 +211,11 @@ class VoiceBotWebSocket:
             
             # Определяем время ожидания в зависимости от стадии
             if stage == 1:
-                wait_time = 5.0  # Первая напоминалка через 5 сек
+                wait_time = 15.0  # Первая напоминалка через 5 сек
             elif stage == 2:
-                wait_time = 10.0  # Вторая напоминалка через 10 сек
+                wait_time = 25.0  # Вторая напоминалка через 10 сек
             else:  # stage == 3
-                wait_time = 10.0  # Завершение через 10 сек
+                wait_time = 30.0  # Завершение через 10 сек
             
             print(f"⏰ Starting timeout stage {stage} for {user_id} (waiting {wait_time}s)")
             await asyncio.sleep(wait_time)
