@@ -214,15 +214,18 @@
                 this.candidateData = null;
                 this.cvData = null;
                 
-                // VAD settings
+                // Улучшенные VAD настройки для коротких фраз
                 this.audioContext = null;
                 this.analyser = null;
                 this.microphone = null;
-                this.vadThreshold = 10;
-                this.silenceTimeout = 1500;
+                this.vadThreshold = 8;  // Снижаем порог для лучшего захвата тихих звуков
+                this.silenceTimeout = 800;  // Уменьшаем время тишины для коротких фраз
                 this.silenceTimer = null;
                 this.voiceDetected = false;
                 this.autoStopTimeout = null;
+                this.minRecordingTime = 300;  // Минимальное время записи (мс)
+                this.maxRecordingTime = 8000;  // Максимальное время записи (мс)
+                this.recordingStartTime = null;
                 
                 // Audio playback
                 this.audioQueue = [];
@@ -349,12 +352,19 @@
                 if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                    const stream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             sampleRate: 16000,
                             channelCount: 1,
                             echoCancellation: true,
-                            noiseSuppression: true
+                            noiseSuppression: true,
+                            autoGainControl: true,  // Автоматическая регулировка усиления
+                            googEchoCancellation: true,
+                            googAutoGainControl: true,
+                            googNoiseSuppression: true,
+                            googHighpassFilter: true,
+                            googTypingNoiseDetection: true,
+                            googAudioMirroring: false
                         }
                     });
 
@@ -375,9 +385,27 @@
                     this.analyser.smoothingTimeConstant = 0.3;
                     this.microphone.connect(this.analyser);
 
-                    // MediaRecorder
+                    // MediaRecorder с улучшенными настройками для коротких фраз
+                    const mimeTypes = [
+                        'audio/webm;codecs=opus',
+                        'audio/ogg;codecs=opus',
+                        'audio/mp4;codecs=mp4a.40.2',
+                        'audio/webm'
+                    ];
+                    
+                    let selectedMimeType = 'audio/webm';
+                    for (const mimeType of mimeTypes) {
+                        if (MediaRecorder.isTypeSupported(mimeType)) {
+                            selectedMimeType = mimeType;
+                            break;
+                        }
+                    }
+                    
+                    console.log(`🎙️ Using MIME type: ${selectedMimeType}`);
+                    
                     this.mediaRecorder = new MediaRecorder(stream, {
-                        mimeType: 'audio/webm;codecs=opus'
+                        mimeType: selectedMimeType,
+                        audioBitsPerSecond: 64000  // Оптимальный битрейт для речи
                     });
 
                     this.mediaRecorder.ondataavailable = (event) => {
@@ -427,25 +455,55 @@
                 const dataArray = new Uint8Array(bufferLength);
                 let consecutiveDetections = 0;
                 let consecutiveSilence = 0;
-                const requiredDetections = 2;
-                const requiredSilence = 20;
+                const requiredDetections = 1;  // Уменьшаем для быстрого реагирования
+                const requiredSilence = 15;    // Уменьшаем для коротких пауз
+                
+                // Улучшенная детекция для коротких фраз
+                let energyHistory = [];
+                const historySize = 10;
+                let backgroundNoise = 0;
+                let noiseCalibrated = false;
 
                 const detectSound = () => {
                     if (!this.isListening) return;
 
                     this.analyser.getByteFrequencyData(dataArray);
                     
+                    // Вычисляем различные метрики звука
                     let sum = 0;
                     let rms = 0;
+                    let peak = 0;
+                    
                     for (let i = 0; i < bufferLength; i++) {
-                        sum += dataArray[i];
-                        rms += dataArray[i] * dataArray[i];
+                        const value = dataArray[i];
+                        sum += value;
+                        rms += value * value;
+                        peak = Math.max(peak, value);
                     }
+                    
                     const average = sum / bufferLength;
                     const rmsValue = Math.sqrt(rms / bufferLength);
-                    const soundLevel = Math.max(average, rmsValue * 0.5);
+                    
+                    // Комбинированная метрика для лучшего обнаружения
+                    const energy = (average * 0.3) + (rmsValue * 0.5) + (peak * 0.2);
+                    
+                    // Калибровка фонового шума
+                    if (!noiseCalibrated) {
+                        energyHistory.push(energy);
+                        if (energyHistory.length >= historySize) {
+                            backgroundNoise = energyHistory.reduce((a, b) => a + b) / historySize;
+                            noiseCalibrated = true;
+                            console.log(`🎧 Background noise calibrated: ${backgroundNoise.toFixed(2)}`);
+                        }
+                        requestAnimationFrame(detectSound);
+                        return;
+                    }
+                    
+                    // Адаптивный порог на основе фонового шума
+                    const adaptiveThreshold = Math.max(this.vadThreshold, backgroundNoise * 1.5);
+                    const isVoiceDetected = energy > adaptiveThreshold;
 
-                    if (soundLevel > this.vadThreshold) {
+                    if (isVoiceDetected) {
                         consecutiveDetections++;
                         consecutiveSilence = 0;
                         
@@ -467,6 +525,12 @@
                             }, this.silenceTimeout);
                         }
                     }
+                    
+                    // Обновляем историю энергии для адаптации к изменениям
+                    if (energyHistory.length >= historySize) {
+                        energyHistory.shift();
+                    }
+                    energyHistory.push(energy);
 
                     requestAnimationFrame(detectSound);
                 };
@@ -480,19 +544,51 @@
                 this.isRecording = true;
                 this.voiceDetected = true;
                 this.audioChunks = [];
+                this.recordingStartTime = Date.now();
                 
+                console.log('🎤 Voice detection started');
                 this.updateStatusText('🎤 Recording...');
+                
+                // Отправляем сообщение о начале записи голоса для остановки таймера таймаута
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'voice_start'
+                    }));
+                    console.log('📤 Sent voice_start message to stop timeout timer');
+                }
+                
                 this.mediaRecorder.start();
                 
+                // Адаптивный таймаут для коротких фраз
                 this.autoStopTimeout = setTimeout(() => {
                     if (this.isRecording) {
+                        console.log('⏰ Auto-stopping recording due to timeout');
                         this.onVoiceEnd();
                     }
-                }, 10000);
+                }, this.maxRecordingTime);
             }
 
             onVoiceEnd() {
                 if (!this.isRecording) return;
+
+                const recordingDuration = Date.now() - this.recordingStartTime;
+                console.log(`🎤 Voice detection ended after ${recordingDuration}ms`);
+                
+                // Проверяем минимальную длительность записи
+                if (recordingDuration < this.minRecordingTime) {
+                    console.log(`⚠️ Recording too short (${recordingDuration}ms), ignoring`);
+                    this.isRecording = false;
+                    this.voiceDetected = false;
+                    this.audioChunks = [];
+                    
+                    if (this.autoStopTimeout) {
+                        clearTimeout(this.autoStopTimeout);
+                        this.autoStopTimeout = null;
+                    }
+                    
+                    this.updateStatusText('🎧 Listening...');
+                    return;
+                }
 
                 this.voiceDetected = false;
                 this.silenceTimer = null;
@@ -514,25 +610,43 @@
             }
 
             async processRecording() {
-                if (this.audioChunks.length === 0) return;
+                if (this.audioChunks.length === 0) {
+                    console.log('⚠️ No audio chunks to process');
+                    return;
+                }
 
                 try {
                     const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                    console.log(`📤 Processing audio blob: ${audioBlob.size} bytes`);
                     
-                    if (audioBlob.size < 100) return;
+                    // Снижаем минимальный размер для коротких фраз
+                    if (audioBlob.size < 50) {
+                        console.log('⚠️ Audio blob too small, skipping');
+                        return;
+                    }
                     
                     const arrayBuffer = await audioBlob.arrayBuffer();
                     const audioData = new Uint8Array(arrayBuffer);
                     const base64Audio = btoa(String.fromCharCode.apply(null, audioData));
                     
+                    console.log(`📤 Sending audio data: ${base64Audio.length} chars`);
+                    
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                         this.ws.send(JSON.stringify({
                             type: 'audio',
-                            audio: base64Audio
+                            audio: base64Audio,
+                            metadata: {
+                                size: audioBlob.size,
+                                duration: this.recordingStartTime ? Date.now() - this.recordingStartTime : 0,
+                                chunks: this.audioChunks.length
+                            }
                         }));
+                    } else {
+                        console.log('⚠️ WebSocket not ready, cannot send audio');
                     }
 
                 } catch (error) {
+                    console.error('❌ Recording processing error:', error);
                     this.updateStatusText('❌ Recording processing error');
                 }
             }

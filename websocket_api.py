@@ -43,6 +43,7 @@ class VoiceBotWebSocket:
         self.user_llm_clients: Dict[str, OpenRouterClient] = {}  # Отдельный LLM клиент для каждого пользователя
         self.user_timeout_tasks: Dict[str, asyncio.Task] = {}  # Задачи таймаута для каждого пользователя
         self.user_timeout_active: Dict[str, bool] = {}  # Флаг активного таймаута для каждого пользователя
+        self.user_timeout_paused: Dict[str, bool] = {}  # Флаг приостановленного таймаута (voice_start)
         self.user_timeout_stage: Dict[str, int] = {}  # Стадия таймаута (0, 1, 2)
         self.timeout_responses = {
             1: [  # Первая напоминалка (5 сек)
@@ -194,10 +195,22 @@ class VoiceBotWebSocket:
             self._timeout_handler(user_id)
         )
     
+    async def pause_response_timeout(self, user_id: str):
+        """Приостанавливает таймер ожидания ответа (voice_start)"""
+        self.user_timeout_paused[user_id] = True
+        print(f"⏸️ Timeout paused for {user_id}")
+    
+    async def resume_response_timeout(self, user_id: str):
+        """Возобновляет таймер ожидания ответа если он был приостановлен"""
+        if self.user_timeout_paused.get(user_id, False):
+            self.user_timeout_paused[user_id] = False
+            print(f"▶️ Timeout resumed for {user_id}")
+    
     async def cancel_response_timeout(self, user_id: str):
         """Отменяет таймер ожидания ответа"""
         # Сбрасываем флаг активного таймера и стадию
         self.user_timeout_active[user_id] = False
+        self.user_timeout_paused[user_id] = False
         self.user_timeout_stage[user_id] = 0
         
         if user_id in self.user_timeout_tasks:
@@ -220,9 +233,20 @@ class VoiceBotWebSocket:
             print(f"⏰ Starting timeout stage {stage} for {user_id} (waiting {wait_time}s)")
             await asyncio.sleep(wait_time)
             
-            # Проверяем, что таймер все еще активен
+            # Проверяем, что таймер все еще активен и не приостановлен
             if not self.user_timeout_active.get(user_id, False):
                 return
+            
+            # Если таймер приостановлен (voice_start), ждем еще немного
+            if self.user_timeout_paused.get(user_id, False):
+                print(f"⏸️ Timeout paused for {user_id}, waiting...")
+                await asyncio.sleep(1.0)  # Ждем 1 секунду и проверяем снова
+                if self.user_timeout_paused.get(user_id, False):
+                    # Если все еще приостановлен, перезапускаем обработчик
+                    self.user_timeout_tasks[user_id] = asyncio.create_task(
+                        self._timeout_handler(user_id)
+                    )
+                    return
             
             # Если дошли сюда, значит пользователь не ответил
             import random
@@ -401,6 +425,8 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
         # Очищаем флаги таймаута
         if user_id in self.user_timeout_active:
             del self.user_timeout_active[user_id]
+        if user_id in self.user_timeout_paused:
+            del self.user_timeout_paused[user_id]
         if user_id in self.user_timeout_stage:
             del self.user_timeout_stage[user_id]
         print(f"❌ User {user_id} disconnected")
@@ -429,12 +455,13 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             print(f"🎧 STT result for {user_id}: '{user_text}'")
             
             if not user_text.strip():
-                print(f"⚠️ Empty STT result for {user_id} - ignoring, keeping timeout active")
+                print(f"⚠️ Empty STT result for {user_id} - resuming timeout if paused")
                 await self.send_message(user_id, {
                     "type": "status",
                     "message": "🎧 Could not recognize speech, please try again"
                 })
-                # НЕ отменяем таймер для пустых результатов - продолжаем ждать
+                # Возобновляем таймер если он был приостановлен из-за voice_start
+                await self.resume_response_timeout(user_id)
                 return
             
             # Отменяем таймер ожидания только если получили реальный текст
@@ -639,6 +666,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 
             elif data["type"] == "ping":
                 await voice_bot.send_message(user_id, {"type": "pong"})
+                
+            elif data["type"] == "voice_start":
+                print(f"🎤 Voice start detected for {user_id}, pausing timeout timer")
+                # Приостанавливаем таймер таймаута когда пользователь начинает говорить
+                await voice_bot.pause_response_timeout(user_id)
                 
             elif data["type"] == "audio_playback_complete":
                 print(f"🔊 Audio playback completed for {user_id}")
