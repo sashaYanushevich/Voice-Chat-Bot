@@ -45,17 +45,43 @@ class DeepgramSTT:
         client_config = DeepgramClientOptions(options={"keepalive": "true"})
         self.client = DeepgramClient(self.api_key, client_config)
         
-        # Настройки для предзаписанного аудио
+        # Улучшенные настройки для предзаписанного аудио
         self.prerecorded_options = PrerecordedOptions(
             model="nova-2",
             punctuate=True,
             language="en-US",
             smart_format=True,
+            # Улучшения для коротких фраз
+            diarize=False,  # Отключаем диаризацию для лучшей производительности
+            utterances=True,  # Включаем разделение на высказывания
+            paragraphs=False,  # Отключаем для коротких фраз
+            detect_language=False,  # Отключаем автоопределение языка
+            # Настройки для улучшения качества
+            profanity_filter=False,
+            redact=False,
+            search=None,
+            replace=None,
+            keywords=None,
+            version="latest"
+        )
+        
+        # Альтернативные настройки для очень коротких фраз (используем nova-2 с другими параметрами)
+        self.short_phrase_options = PrerecordedOptions(
+            model="nova-2",
+            punctuate=True,
+            language="en-US",
+            smart_format=True,
+            utterances=True,
+            detect_language=False,
+            # Более агрессивные настройки для коротких фраз
+            filler_words=False,  # Убираем слова-паразиты
+            profanity_filter=False,
+            redact=False
         )
     
     async def transcribe_audio_bytes(self, audio_bytes: bytes) -> str:
         """
-        Транскрибирует аудио из байтов.
+        Улучшенная транскрипция аудио из байтов с поддержкой коротких фраз.
         
         Args:
             audio_bytes: Аудио данные в байтах
@@ -64,18 +90,76 @@ class DeepgramSTT:
             str: Распознанный текст
         """
         try:
+            # Определяем длительность аудио для выбора оптимальной стратегии
+            audio_duration = self._estimate_audio_duration(audio_bytes)
+            print(f"🎧 Estimated audio duration: {audio_duration:.2f}s")
+            
             # Создаем источник аудио из байтов
             audio_source = {"buffer": audio_bytes}
             
-            # Выполняем транскрипцию
+            # Пробуем различные конфигурации в порядке приоритета
+            configurations = [
+                ("short_phrase", self.short_phrase_options),
+                ("standard", self.prerecorded_options),
+                ("minimal", self._get_minimal_options())
+            ]
+            
+            transcript = ""
+            for config_name, options in configurations:
+                print(f"🔄 Trying {config_name} configuration...")
+                transcript = await self._try_transcription(audio_source, options)
+                
+                if transcript:
+                    print(f"✅ Success with {config_name} configuration")
+                    break
+                else:
+                    print(f"⚠️ {config_name} configuration failed, trying next...")
+            
+            # Постобработка результата
+            if transcript:
+                transcript = self._post_process_transcript(transcript)
+                print(f"✅ Final STT result: '{transcript}'")
+            else:
+                print("⚠️ All transcription attempts failed")
+            
+            return transcript
+            
+        except Exception as e:
+            print(f"❌ STT transcription error: {e}")
+            return ""
+    
+    def _get_minimal_options(self) -> PrerecordedOptions:
+        """
+        Минимальные настройки для максимальной совместимости.
+        """
+        return PrerecordedOptions(
+            model="nova-2",
+            language="en-US",
+            punctuate=True
+        )
+    
+    def _estimate_audio_duration(self, audio_bytes: bytes) -> float:
+        """
+        Приблизительная оценка длительности аудио.
+        Простая эвристика на основе размера файла.
+        """
+        # Примерная оценка: WebM Opus ~16kbps для речи
+        estimated_duration = len(audio_bytes) / (16000 / 8)  # байт/сек
+        return max(0.1, min(estimated_duration, 30.0))  # Ограничиваем от 0.1 до 30 сек
+    
+    async def _try_transcription(self, audio_source: dict, options: PrerecordedOptions) -> str:
+        """
+        Выполняет транскрипцию с заданными настройками.
+        """
+        try:
             response = await self.client.listen.asyncprerecorded.v("1").transcribe_file(
-                audio_source, 
-                self.prerecorded_options
+                audio_source,
+                options
             )
             
             # Извлекаем текст из ответа
-            if (response.results and 
-                response.results.channels and 
+            if (response.results and
+                response.results.channels and
                 len(response.results.channels) > 0 and
                 response.results.channels[0].alternatives and
                 len(response.results.channels[0].alternatives) > 0):
@@ -86,8 +170,47 @@ class DeepgramSTT:
             return ""
             
         except Exception as e:
-            print(f"STT transcription error: {e}")
+            print(f"⚠️ Transcription attempt failed: {e}")
             return ""
+    
+    def _post_process_transcript(self, transcript: str) -> str:
+        """
+        Постобработка транскрипта для улучшения качества.
+        """
+        if not transcript:
+            return ""
+        
+        # Убираем лишние пробелы
+        transcript = ' '.join(transcript.split())
+        
+        # Исправляем распространенные ошибки для коротких фраз
+        corrections = {
+            # Распространенные ошибки в коротких ответах
+            'yeah': 'yes',
+            'yep': 'yes',
+            'nope': 'no',
+            'uh huh': 'yes',
+            'mm hmm': 'yes',
+            'uh uh': 'no',
+            # Исправления для технических терминов
+            'react': 'React',
+            'javascript': 'JavaScript',
+            'typescript': 'TypeScript',
+            'node': 'Node',
+            'angular': 'Angular',
+            'vue': 'Vue'
+        }
+        
+        # Применяем исправления только для коротких фраз (до 5 слов)
+        words = transcript.split()
+        if len(words) <= 5:
+            transcript_lower = transcript.lower()
+            for wrong, correct in corrections.items():
+                if transcript_lower == wrong or transcript_lower.startswith(wrong + ' ') or transcript_lower.endswith(' ' + wrong):
+                    transcript = transcript_lower.replace(wrong, correct)
+                    break
+        
+        return transcript
     
     async def transcribe_audio_file(self, file_path: str) -> str:
         """
@@ -146,6 +269,7 @@ async def transcribe_from_microphone():
         dg_stream.on(LiveTranscriptionEvents.Transcript, handle_transcript)
         dg_stream.on(LiveTranscriptionEvents.Error, handle_error)
 
+        # Улучшенные настройки для живой транскрипции коротких фраз
         options = LiveOptions(
             model="nova-2",
             punctuate=True,
@@ -153,7 +277,21 @@ async def transcribe_from_microphone():
             encoding="linear16",
             channels=1,
             sample_rate=16000,
-            endpointing=True
+            # Настройки для лучшего распознавания коротких фраз
+            endpointing=300,  # Увеличиваем время ожидания окончания речи (мс)
+            vad_events=True,  # Включаем события детекции голоса
+            interim_results=True,  # Включаем промежуточные результаты
+            utterance_end_ms=1000,  # Время тишины для завершения высказывания
+            smart_format=True,  # Умное форматирование
+            profanity_filter=False,
+            redact=False,
+            diarize=False,  # Отключаем для лучшей производительности
+            multichannel=False,
+            alternatives=1,  # Получаем только лучший результат
+            numerals=True,  # Преобразуем числа в цифры
+            search=None,
+            replace=None,
+            keywords=None
         )
 
         await dg_stream.start(options)
