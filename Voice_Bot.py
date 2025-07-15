@@ -73,9 +73,11 @@ class LiveTranscriber:
             encoding="linear16",
             channels=1,
             sample_rate=16000,
-            endpointing=200,  # Уменьшаем время тишины для лучшей отзывчивости
+            endpointing=500,  # Увеличиваем время ожидания - предотвращает обрезание первого слова
             smart_format=True,
-            interim_results=False,
+            interim_results=True,  # Включаем промежуточные результаты для лучшего захвата речи
+            vad_turnoff=250,  # Задержка перед отключением VAD
+            utterance_end_ms=1500,  # Время тишины для завершения высказывания
         )
         await connection.start(options)
         
@@ -92,7 +94,11 @@ class LiveTranscriber:
     async def _on_message(self, _, result, **kwargs):
         """Обратный вызов для обработки сообщений транскрипции от Deepgram."""
         if result.is_final and result.channel.alternatives[0].transcript.strip():
-            transcript = result.channel.alternatives[0].transcript
+            transcript = result.channel.alternatives[0].transcript.strip()
+            
+            # Постобработка для исправления обрезанных первых слов
+            transcript = self._fix_truncated_transcript(transcript)
+            
             if self.transcript_future and not self.transcript_future.done():
                 self.transcript_future.set_result(transcript)
 
@@ -101,6 +107,45 @@ class LiveTranscriber:
         print(f"\nSTT Error: {error}\n")
         if self.transcript_future and not self.transcript_future.done():
             self.transcript_future.set_exception(Exception(f"Ошибка STT: {error}"))
+    
+    def _fix_truncated_transcript(self, transcript: str) -> str:
+        """
+        Исправляет обрезанные первые слова в транскрипте.
+        """
+        if not transcript:
+            return transcript
+        
+        # Словарь для исправления обрезанных слов
+        truncation_fixes = {
+            # Обрезанные приветствия
+            # Обрезанные технические термины
+            'eact': 'React',
+            'avaScript': 'JavaScript',
+            'ypeScript': 'TypeScript',
+            'ode': 'Node',
+            'ngular': 'Angular',
+            'ue': 'Vue'
+        }
+        
+        words = transcript.split()
+        if words:
+            first_word = words[0].lower()
+            
+            # Проверяем точные совпадения
+            if first_word in truncation_fixes:
+                words[0] = truncation_fixes[first_word]
+                print(f"🔧 Fixed truncated word: '{first_word}' -> '{truncation_fixes[first_word]}'")
+                return ' '.join(words)
+            
+            # Проверяем частичные совпадения для коротких слов (до 4 символов)
+            if len(first_word) <= 4:
+                for truncated, full in truncation_fixes.items():
+                    if first_word == truncated.lower():
+                        words[0] = full
+                        print(f"🔧 Fixed truncated word: '{first_word}' -> '{full}'")
+                        return ' '.join(words)
+        
+        return transcript
 
 class LLMProcessor:
     """Управляет взаимодействием с языковой моделью через OpenRouter."""

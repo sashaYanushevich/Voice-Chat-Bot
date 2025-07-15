@@ -254,12 +254,7 @@ class VoiceBotWebSocket:
             
             print(f"⏰ Timeout stage {stage} for user {user_id}: {timeout_message}")
             
-            await self.send_message(user_id, {
-                "type": "bot_waiting",
-                "text": timeout_message
-            })
-            
-            # Озвучиваем сообщение о таймауте
+            # Озвучиваем сообщение о таймауте (текст отправляется одновременно с первым аудио чанком)
             if stage == 3:
                 await self.send_message(user_id, {
                     "type": "status",
@@ -271,7 +266,7 @@ class VoiceBotWebSocket:
                     "message": "🔊 HR is prompting you..."
                 })
             
-            await self._synthesize_and_send_audio(user_id, timeout_message)
+            await self._synthesize_and_send_audio(user_id, timeout_message, "bot_waiting")
             
             if stage == 3:
                 # Завершаем интервью
@@ -378,12 +373,7 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             bot_response = await user_llm.chat_completion(greeting_prompt, enhanced_prompt)
             print(f"🤖 HR greeting to {user_id}: {bot_response}")
             
-            await self.send_message(user_id, {
-                "type": "bot_text", 
-                "text": bot_response
-            })
-            
-            # Озвучиваем приветствие
+            # Озвучиваем приветствие (текст отправляется одновременно с первым аудио чанком)
             await self.send_message(user_id, {
                 "type": "status",
                 "message": "🔊 HR is greeting you..."
@@ -516,12 +506,7 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             
             print(f"🤖 Bot to {user_id}: {bot_response}")
             
-            await self.send_message(user_id, {
-                "type": "bot_text",
-                "text": bot_response
-            })
-            
-            # 3. TTS - озвучиваем ответ
+            # 3. TTS - озвучиваем ответ (текст отправляется одновременно с первым аудио чанком)
             print(f"🔊 Starting TTS for {user_id}")
             await self.send_message(user_id, {
                 "type": "status",
@@ -550,7 +535,7 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                 "message": f"❌ Processing error: {str(e)}"
             })
     
-    async def _synthesize_and_send_audio(self, user_id: str, text: str):
+    async def _synthesize_and_send_audio(self, user_id: str, text: str, message_type: str = "bot_text"):
         """Синтез речи с отправкой чанков"""
         try:
             # Разбиваем на чанки
@@ -560,8 +545,26 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                 # Синтезируем чанк
                 audio_data = await self.tts.synthesize_chunk(chunk)
                 if audio_data:
-                    # Кодируем в base64 и отправляем
+                    # Кодируем в base64
                     audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+                    
+                    # Если это первый чанк, отправляем текст и аудио одновременно
+                    if i == 0:
+                        # Отправляем текстовое сообщение
+                        if message_type == "bot_waiting":
+                            await self.send_message(user_id, {
+                                "type": "bot_waiting",
+                                "text": text
+                            })
+                            print(f"📝 Sending timeout text: '{text}'")
+                        else:
+                            await self.send_message(user_id, {
+                                "type": "bot_text",
+                                "text": text
+                            })
+                            print(f"📝 Sending bot text: '{text}'")
+                    
+                    # Отправляем аудио чанк
                     await self.send_message(user_id, {
                         "type": "audio_chunk",
                         "audio": audio_b64,

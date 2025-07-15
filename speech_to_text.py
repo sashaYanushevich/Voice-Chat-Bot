@@ -51,18 +51,22 @@ class DeepgramSTT:
             punctuate=True,
             language="en-US",
             smart_format=True,
-            # Улучшения для коротких фраз
+            # Улучшения для коротких фраз и предотвращения обрезания первого слова
             diarize=False,  # Отключаем диаризацию для лучшей производительности
             utterances=True,  # Включаем разделение на высказывания
             paragraphs=False,  # Отключаем для коротких фраз
             detect_language=False,  # Отключаем автоопределение языка
-            # Настройки для улучшения качества
+            # Настройки для улучшения качества и предотвращения обрезания
             profanity_filter=False,
             redact=False,
             search=None,
             replace=None,
             keywords=None,
-            version="latest"
+            version="latest",
+            # Дополнительные настройки для лучшего захвата начала речи
+            multichannel=False,
+            alternatives=1,
+            numerals=True
         )
         
         # Альтернативные настройки для очень коротких фраз (используем nova-2 с другими параметрами)
@@ -73,10 +77,15 @@ class DeepgramSTT:
             smart_format=True,
             utterances=True,
             detect_language=False,
-            # Более агрессивные настройки для коротких фраз
+            # Более мягкие настройки для коротких фраз чтобы не обрезать первое слово
             filler_words=False,  # Убираем слова-паразиты
             profanity_filter=False,
-            redact=False
+            redact=False,
+            # Дополнительные настройки для лучшего захвата коротких фраз
+            multichannel=False,
+            alternatives=1,
+            numerals=True,
+            diarize=False
         )
     
     async def transcribe_audio_bytes(self, audio_bytes: bytes) -> str:
@@ -147,6 +156,7 @@ class DeepgramSTT:
         estimated_duration = len(audio_bytes) / (16000 / 8)  # байт/сек
         return max(0.1, min(estimated_duration, 30.0))  # Ограничиваем от 0.1 до 30 сек
     
+    
     async def _try_transcription(self, audio_source: dict, options: PrerecordedOptions) -> str:
         """
         Выполняет транскрипцию с заданными настройками.
@@ -183,6 +193,9 @@ class DeepgramSTT:
         # Убираем лишние пробелы
         transcript = ' '.join(transcript.split())
         
+        # Проверяем и исправляем обрезанные первые слова
+        transcript = self._fix_truncated_first_word(transcript)
+        
         # Исправляем распространенные ошибки для коротких фраз
         corrections = {
             # Распространенные ошибки в коротких ответах
@@ -209,6 +222,43 @@ class DeepgramSTT:
                 if transcript_lower == wrong or transcript_lower.startswith(wrong + ' ') or transcript_lower.endswith(' ' + wrong):
                     transcript = transcript_lower.replace(wrong, correct)
                     break
+        
+        return transcript
+    
+    def _fix_truncated_first_word(self, transcript: str) -> str:
+        """
+        Исправляет обрезанные первые слова в транскрипте.
+        """
+        if not transcript:
+            return transcript
+        
+        # Словарь для исправления обрезанных слов
+        truncation_fixes = {
+            # Обрезанные приветствия
+        
+            'eact': 'React',
+            'avaScript': 'JavaScript',
+            'ypeScript': 'TypeScript',
+            'ode': 'Node',
+            'ngular': 'Angular',
+            'ue': 'Vue'
+        }
+        
+        words = transcript.split()
+        if words:
+            first_word = words[0].lower()
+            
+            # Проверяем точные совпадения
+            if first_word in truncation_fixes:
+                words[0] = truncation_fixes[first_word]
+                return ' '.join(words)
+            
+            # Проверяем частичные совпадения для коротких слов (до 4 символов)
+            if len(first_word) <= 4:
+                for truncated, full in truncation_fixes.items():
+                    if first_word == truncated.lower():
+                        words[0] = full
+                        return ' '.join(words)
         
         return transcript
     
@@ -278,10 +328,11 @@ async def transcribe_from_microphone():
             channels=1,
             sample_rate=16000,
             # Настройки для лучшего распознавания коротких фраз
-            endpointing=300,  # Увеличиваем время ожидания окончания речи (мс)
+            endpointing=500,  # Увеличиваем время ожидания окончания речи (мс) - предотвращает обрезание первого слова
             vad_events=True,  # Включаем события детекции голоса
             interim_results=True,  # Включаем промежуточные результаты
-            utterance_end_ms=1000,  # Время тишины для завершения высказывания
+            utterance_end_ms=1500,  # Увеличиваем время тишины для завершения высказывания
+            vad_turnoff=250,  # Задержка перед отключением VAD - помогает захватить начало речи
             smart_format=True,  # Умное форматирование
             profanity_filter=False,
             redact=False,
