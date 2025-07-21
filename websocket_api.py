@@ -570,7 +570,7 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                             print(f"📝 Sending timeout text: '{text}'")
                         elif message_type == "interview_end":
                             await self.send_message(user_id, {
-                                "type": "interview_end_text",
+                                "type": "bot_text",
                                 "text": text
                             })
                             print(f"📝 Sending interview end text: '{text}'")
