@@ -688,6 +688,16 @@
                         }
                         break;
 
+                    case 'interview_end_text':
+                        this.addMessage(data.text, false);
+                        this.updateStatus('processing', '🎯 Interview Ending');
+                        this.updateStatusText('Interview is being completed...');
+                        break;
+
+                    case 'interview_completed':
+                        this.handleInterviewCompletion();
+                        break;
+
                     case 'error':
                         this.updateStatusText('❌ ' + data.message);
                         break;
@@ -812,6 +822,65 @@
                     this.currentAudio.pause();
                     this.currentAudio = null;
                 }
+            }
+
+            handleInterviewCompletion() {
+                console.log('🎯 Interview completed!');
+                
+                // Останавливаем все активности
+                if (this.isListening) {
+                    this.stopListening();
+                }
+                
+                this.stopAudioPlayback();
+                
+                // Обновляем статус
+                this.updateStatus('completed', '🎯 Interview Completed');
+                this.updateStatusText('Interview completed successfully! Thank you for your time.');
+                
+                // Отключаем кнопки
+                this.muteBtnEl.disabled = true;
+                this.endCallBtnEl.disabled = true;
+                
+                // Добавляем сообщение о завершении
+                this.addMessage('Interview completed. Thank you for your participation!', false);
+                
+                // Закрываем WebSocket соединение
+                if (this.ws) {
+                    this.ws.close();
+                }
+                
+                // Очищаем localStorage
+                localStorage.removeItem('candidateData');
+                localStorage.removeItem('sessionId');
+                
+                // Перенаправляем на главную страницу через 5 секунд
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 5000);
+                
+                // Показываем уведомление пользователю
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: #22c55e;
+                    color: white;
+                    padding: 1rem 2rem;
+                    border-radius: 10px;
+                    z-index: 1000;
+                    font-weight: bold;
+                `;
+                notification.textContent = 'Interview completed! Redirecting in 5 seconds...';
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 4000);
             }
         }
 

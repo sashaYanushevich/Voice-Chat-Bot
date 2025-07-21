@@ -370,8 +370,14 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             
             # Получаем персональный LLM клиент для пользователя
             user_llm = self.get_user_llm_client(user_id)
-            bot_response = await user_llm.chat_completion(greeting_prompt, enhanced_prompt)
+            bot_response, interview_ended = await user_llm.chat_completion(greeting_prompt, enhanced_prompt)
             print(f"🤖 HR greeting to {user_id}: {bot_response}")
+            
+            # Проверяем, не завершилось ли интервью сразу (маловероятно, но на всякий случай)
+            if interview_ended:
+                print(f"🎯 Interview ended immediately for {user_id}")
+                await self._handle_interview_completion(user_id, bot_response)
+                return
             
             # Озвучиваем приветствие (текст отправляется одновременно с первым аудио чанком)
             await self.send_message(user_id, {
@@ -500,11 +506,16 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                 
                 # Получаем персональный LLM клиент для пользователя
                 user_llm = self.get_user_llm_client(user_id)
-                bot_response = await user_llm.chat_completion(user_text, enhanced_prompt)
+                bot_response, interview_ended = await user_llm.chat_completion(user_text, enhanced_prompt)
             
             print(f"🧠 LLM result for {user_id}: '{bot_response}'")
-            
             print(f"🤖 Bot to {user_id}: {bot_response}")
+            
+            # Проверяем, завершилось ли интервью
+            if interview_ended:
+                print(f"🎯 Interview ended for {user_id}")
+                await self._handle_interview_completion(user_id, bot_response)
+                return
             
             # 3. TTS - озвучиваем ответ (текст отправляется одновременно с первым аудио чанком)
             print(f"🔊 Starting TTS for {user_id}")
@@ -557,6 +568,12 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
                                 "text": text
                             })
                             print(f"📝 Sending timeout text: '{text}'")
+                        elif message_type == "interview_end":
+                            await self.send_message(user_id, {
+                                "type": "interview_end_text",
+                                "text": text
+                            })
+                            print(f"📝 Sending interview end text: '{text}'")
                         else:
                             await self.send_message(user_id, {
                                 "type": "bot_text",
@@ -580,6 +597,38 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             await self.send_message(user_id, {
                 "type": "error",
                 "message": "❌ Speech synthesis error"
+            })
+    
+    async def _handle_interview_completion(self, user_id: str, final_message: str):
+        """Обрабатывает завершение интервью"""
+        try:
+            print(f"🎯 Handling interview completion for {user_id}")
+            
+            # Отменяем все активные таймеры
+            await self.cancel_response_timeout(user_id)
+            
+            # Отправляем статус завершения
+            await self.send_message(user_id, {
+                "type": "status",
+                "message": "🎯 Interview completed! Generating final message..."
+            })
+            
+            # Озвучиваем финальное сообщение
+            await self._synthesize_and_send_audio(user_id, final_message, "interview_end")
+            
+            # Отправляем уведомление о завершении интервью
+            await self.send_message(user_id, {
+                "type": "interview_completed",
+                "message": "🎯 Interview has been completed successfully"
+            })
+            
+            print(f"✅ Interview completion handled for {user_id}")
+            
+        except Exception as e:
+            print(f"❌ Error handling interview completion for {user_id}: {e}")
+            await self.send_message(user_id, {
+                "type": "error",
+                "message": "❌ Error completing interview"
             })
     
     async def process_cv_upload(self, user_id: str, filename: str, base64_data: str, candidate_info: dict = None):
