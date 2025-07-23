@@ -7,7 +7,7 @@ from openai import AsyncOpenAI
 load_dotenv()
 
 class OpenRouterClient:
-    def __init__(self, model: str = "meta-llama/llama-3.1-8b-instruct"):
+    def __init__(self, model: str = "openai/gpt-4.1"):
         """
         Инициализирует клиент OpenRouter с моделью по умолчанию.
         """
