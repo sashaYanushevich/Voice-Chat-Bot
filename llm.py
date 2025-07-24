@@ -39,7 +39,9 @@ When you have finished asking all your interview questions and are ready to end 
 
 Example: "[INTERVIEW_END] Thank you for completing the screening interview. Our recruitment team will be in touch soon to discuss the next steps. Enjoy the rest of your day!"
 
-This marker will signal the system to automatically end the interview session."""
+This marker will signal the system to automatically end the interview session.
+
+IMPORTANT: Also use [INTERVIEW_END] if the candidate explicitly asks to end the interview, says goodbye, or indicates they want to finish."""
             messages.append({"role": "system", "content": enhanced_system_message})
         
         # Добавляем историю разговора
@@ -66,6 +68,25 @@ This marker will signal the system to automatically end the interview session.""
                 # Убираем метку из сообщения для пользователя
                 assistant_message = assistant_message.replace("[INTERVIEW_END]", "").strip()
                 print("🎯 Interview completion marker detected!")
+            
+            # Дополнительная проверка на ключевые фразы завершения
+            elif not self.interview_completed:
+                completion_phrases = [
+                    "thank you for completing the screening interview",
+                    "our recruitment team will be in touch",
+                    "enjoy the rest of your day",
+                    "we'll contact you",
+                    "thank you for your time",
+                    "we'll be in touch soon"
+                ]
+                
+                assistant_lower = assistant_message.lower()
+                if any(phrase in assistant_lower for phrase in completion_phrases):
+                    # Проверяем, что это действительно завершающее сообщение
+                    if len(assistant_message) < 200 and ("thank you" in assistant_lower or "contact" in assistant_lower):
+                        interview_ended = True
+                        self.interview_completed = True
+                        print("🎯 Interview completion detected by key phrases!")
             
             # Сохраняем в историю разговора
             self.conversation_history.append({"role": "user", "content": user_message})

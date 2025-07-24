@@ -695,7 +695,13 @@
                         break;
 
                     case 'interview_completed':
+                        console.log('🎯 Received interview_completed message');
                         this.handleInterviewCompletion();
+                        break;
+                        
+                    case 'interview_ended':
+                        console.log('🔚 Received interview_ended message (timeout)');
+                        this.handleInterviewTimeout();
                         break;
 
                     case 'error':
@@ -788,6 +794,31 @@
             }
 
             endCall() {
+                console.log('🔚 End call button clicked');
+                
+                // Отправляем сигнал завершения интервью на сервер
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'finish_interview'
+                    }));
+                    console.log('📤 Sent finish_interview message to server');
+                    
+                    // Обновляем статус
+                    this.updateStatus('processing', '🔚 Ending Interview');
+                    this.updateStatusText('Ending interview...');
+                    
+                    // Отключаем кнопки
+                    this.muteBtnEl.disabled = true;
+                    this.endCallBtnEl.disabled = true;
+                } else {
+                    // Если WebSocket недоступен, завершаем локально
+                    this.forceEndCall();
+                }
+            }
+            
+            forceEndCall() {
+                console.log('🔚 Force ending call locally');
+                
                 if (this.isListening) {
                     this.stopListening();
                 }
@@ -874,6 +905,65 @@
                     font-weight: bold;
                 `;
                 notification.textContent = 'Interview completed! Redirecting in 5 seconds...';
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 4000);
+            }
+            
+            handleInterviewTimeout() {
+                console.log('⏰ Interview ended due to timeout');
+                
+                // Останавливаем все активности
+                if (this.isListening) {
+                    this.stopListening();
+                }
+                
+                this.stopAudioPlayback();
+                
+                // Обновляем статус
+                this.updateStatus('disconnected', '⏰ Interview Timed Out');
+                this.updateStatusText('Interview ended due to no response. Thank you for your time.');
+                
+                // Отключаем кнопки
+                this.muteBtnEl.disabled = true;
+                this.endCallBtnEl.disabled = true;
+                
+                // Добавляем сообщение о завершении
+                this.addMessage('Interview ended due to no response. We will contact you to reschedule if needed.', false);
+                
+                // Закрываем WebSocket соединение
+                if (this.ws) {
+                    this.ws.close();
+                }
+                
+                // Очищаем localStorage
+                localStorage.removeItem('candidateData');
+                localStorage.removeItem('sessionId');
+                
+                // Перенаправляем на главную страницу через 5 секунд
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 5000);
+                
+                // Показываем уведомление пользователю
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: #f59e0b;
+                    color: white;
+                    padding: 1rem 2rem;
+                    border-radius: 10px;
+                    z-index: 1000;
+                    font-weight: bold;
+                `;
+                notification.textContent = 'Interview timed out. Redirecting in 5 seconds...';
                 document.body.appendChild(notification);
                 
                 setTimeout(() => {

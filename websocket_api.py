@@ -624,6 +624,11 @@ CRITICAL: Keep response under 30 words. Be extremely brief and direct."""
             
             print(f"✅ Interview completion handled for {user_id}")
             
+            # Автоматически отключаем пользователя через 3 секунды после завершения
+            await asyncio.sleep(3.0)
+            print(f"🔚 Auto-disconnecting user {user_id} after interview completion")
+            self.disconnect(user_id)
+            
         except Exception as e:
             print(f"❌ Error handling interview completion for {user_id}: {e}")
             await self.send_message(user_id, {
@@ -723,6 +728,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 print(f"🎤 Voice start detected for {user_id}, pausing timeout timer")
                 # Приостанавливаем таймер таймаута когда пользователь начинает говорить
                 await voice_bot.pause_response_timeout(user_id)
+                
+            elif data["type"] == "finish_interview":
+                print(f"🔚 Manual interview finish requested by {user_id}")
+                # Принудительно завершаем интервью
+                final_message = "Thank you for completing the screening interview. Our recruitment team will be in touch soon to discuss the next steps. Enjoy the rest of your day!"
+                await voice_bot._handle_interview_completion(user_id, final_message)
                 
             elif data["type"] == "audio_playback_complete":
                 print(f"🔊 Audio playback completed for {user_id}")
